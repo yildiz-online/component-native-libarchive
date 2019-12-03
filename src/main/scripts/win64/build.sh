@@ -1,4 +1,5 @@
 cd ../../c++
+autoreconf -f -i
 ./configure --disable-shared --enable-static --target=x86_64-w64-mingw32 --host=x86_64-w64-mingw32
 make
 
