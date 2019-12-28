@@ -2,7 +2,7 @@
 
 cmake ../../c++ \
 -DZLIB_INCLUDE_DIR="${PWD}/zlib/linux64/include" \
--DZLIB_LIBRARY="${PWD}/zlib/linux64/lib/libzlibstatic.a" \
+-DZLIB_LIBRARY="${PWD}/zlib/linux64/lib/libz.a" \
 -DCMAKE_BUILD_TYPE=Release \
 -DCMAKE_INSTALL_PREFIX="../../../../target/classes/linux64" \
 -DZLIB_WINAPI_EXITCODE=0
