@@ -1,5 +1,8 @@
 #
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.12 FATAL_ERROR)
+if(POLICY CMP0065)
+  cmake_policy(SET CMP0065 NEW) #3.4 don't use `-rdynamic` with executables
+endif()
 if(POLICY CMP0074)
   cmake_policy(SET CMP0074 NEW) #3.12.0 `find_package()`` uses ``<PackageName>_ROOT`` variables.
 endif()
@@ -77,7 +80,7 @@ math(EXPR INTERFACE_VERSION  "13 + ${_minor}")
 # ?? Should there be more here ??
 SET(SOVERSION "${INTERFACE_VERSION}")
 
-# Enalbe CMAKE_PUSH_CHECK_STATE() and CMAKE_POP_CHECK_STATE() macros
+# Enable CMAKE_PUSH_CHECK_STATE() and CMAKE_POP_CHECK_STATE() macros
 # saving and restoring the state of the variables.
 INCLUDE(CMakePushCheckState)
 
@@ -96,24 +99,8 @@ endif ()
 # Especially for early development, we want to be a little
 # aggressive about diagnosing build problems; this can get
 # relaxed somewhat in final shipping versions.
-IF (CMAKE_C_COMPILER_ID MATCHES "^GNU$")
-  SET(CMAKE_REQUIRED_FLAGS "-Wall -Wformat -Wformat-security")
-  #################################################################
-  # Set compile flags for all build types.
-  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wformat -Wformat-security")
-  if (ENABLE_WERROR)
-    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror")
-  endif ()
-  #################################################################
-  # Set compile flags for debug build.
-  # This is added into CMAKE_C_FLAGS when CMAKE_BUILD_TYPE is "Debug"
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wextra")
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wunused")
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wshadow")
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wmissing-prototypes")
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wcast-qual")
-ENDIF (CMAKE_C_COMPILER_ID MATCHES "^GNU$")
-IF (CMAKE_C_COMPILER_ID MATCHES "^Clang$")
+IF (CMAKE_C_COMPILER_ID MATCHES "^GNU$" OR
+    CMAKE_C_COMPILER_ID MATCHES "^Clang$")
   SET(CMAKE_REQUIRED_FLAGS "-Wall -Wformat -Wformat-security")
   #################################################################
   # Set compile flags for all build types.
@@ -130,7 +117,26 @@ IF (CMAKE_C_COMPILER_ID MATCHES "^Clang$")
   SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wshadow")
   SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wmissing-prototypes")
   SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -Wcast-qual")
-ENDIF (CMAKE_C_COMPILER_ID MATCHES "^Clang$")
+  # Ideally this will be a compile/link time check, yet there's no obvious way
+  # how considering how old our minimum required cmake version is. The official
+  # cmake.org side does not host the manual pages even. Normally we can use
+  # either of the following two, yet neither is supported as of 3.0.2
+  # - check_linker_flag - does not exist
+  # - try_compile - does not support linker flags
+  #
+  # The CI fails with this on MacOS
+  IF(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    # Place the functions and data into separate sections, allowing the linker
+    # to garbage collect the unused ones.
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffunction-sections -fdata-sections")
+    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
+    SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--gc-sections")
+    # Printing the discarded section is "too much", so enable on demand.
+    #SET(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -Wl,--print-gc-sections")
+    #SET(CMAKE_SHARED_LINKER_FLAGS_DEBUG "${CMAKE_SHARED_LINKER_FLAGS_DEBUG} -Wl,--print-gc-sections")
+  ENDIF(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin")
+ENDIF (CMAKE_C_COMPILER_ID MATCHES "^GNU$" OR
+       CMAKE_C_COMPILER_ID MATCHES "^Clang$")
 IF (CMAKE_C_COMPILER_ID MATCHES "^XL$")
   SET(CMAKE_C_COMPILER "xlc_r")
   SET(CMAKE_REQUIRED_FLAGS "-qflag=e:e -qformat=sec")
@@ -155,34 +161,34 @@ IF (MSVC)
   #################################################################
   # Set compile flags for debug build.
   # This is added into CMAKE_C_FLAGS when CMAKE_BUILD_TYPE is "Debug"
-  # Enable level 4 C4061: The enumerate has no associated handler in a switch
-  #                       statement.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4061")
+  # Enable level 4 C4062: The enumerate has no associated handler in a switch
+  #                       statement and there is no default that can catch it.
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14062")
   # Enable level 4 C4254: A larger bit field was assigned to a smaller bit
   #                       field.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4254")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14254")
   # Enable level 4 C4295: An array was initialized but the last character in
   #                       the array is not a null; accessing the array may
   #                       produce unexpected results.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4295")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14295")
   # Enable level 4 C4296: An unsigned variable was used in a comparison
   #                       operation with zero.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4296")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14296")
   # Enable level 4 C4389: An operation involved signed and unsigned variables.
   #                       This could result in a loss of data.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4389")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14389")
   # Enable level 4 C4505: The given function is local and not referenced in
   #                       the body of the module; therefore, the function is
   #                       dead code.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4505")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14505")
   # Enable level 4 C4514: The optimizer removed an inline function that is not
   #                       called.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4514")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14514")
   # Enable level 4 C4702: Unreachable code.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4702")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14702")
   # Enable level 4 C4706: The test value in a conditional expression was the
   #                       result of an assignment.
-  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /we4706")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /w14706")
   # /Oi option enables built-in functions.
   SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /Oi")
   #################################################################
@@ -193,7 +199,8 @@ ENDIF (MSVC)
 # Enable CTest/CDash support
 include(CTest)
 
-OPTION(ENABLE_NETTLE "Enable use of Nettle" ON)
+OPTION(ENABLE_MBEDTLS "Enable use of mbed TLS" OFF)
+OPTION(ENABLE_NETTLE "Enable use of Nettle" OFF)
 OPTION(ENABLE_OPENSSL "Enable use of OpenSSL" ON)
 OPTION(ENABLE_LIBB2 "Enable the use of the system LIBB2 library if found" ON)
 OPTION(ENABLE_LZ4 "Enable the use of the system LZ4 library if found" ON)
@@ -206,7 +213,7 @@ OPTION(ENABLE_BZip2 "Enable the use of the system BZip2 library if found" ON)
 OPTION(ENABLE_LIBXML2 "Enable the use of the system libxml2 library if found" ON)
 OPTION(ENABLE_EXPAT "Enable the use of the system EXPAT library if found" ON)
 OPTION(ENABLE_PCREPOSIX "Enable the use of the system PCREPOSIX library if found" ON)
-OPTION(ENABLE_LibGCC "Enable the use of the system LibGCC library if found" ON)
+OPTION(ENABLE_LIBGCC "Enable the use of the system LibGCC library if found" ON)
 # CNG is used for encrypt/decrypt Zip archives on Windows.
 OPTION(ENABLE_CNG "Enable the use of CNG(Crypto Next Generation)" ON)
 
@@ -225,7 +232,7 @@ OPTION(ENABLE_INSTALL "Enable installing of libraries" ON)
 
 SET(POSIX_REGEX_LIB "AUTO" CACHE STRING "Choose what library should provide POSIX regular expression support")
 SET(ENABLE_SAFESEH "AUTO" CACHE STRING "Enable use of /SAFESEH linker flag (MSVC only)")
-SET(WINDOWS_VERSION "WIN7" CACHE STRING "Set Windows version to use (Windows only)")
+SET(WINDOWS_VERSION "WIN10" CACHE STRING "Set Windows version to use (Windows only)")
 
 IF(ENABLE_COVERAGE)
 	include(LibarchiveCodeCoverage)
@@ -236,7 +243,11 @@ IF(ENABLE_TEST)
 ENDIF(ENABLE_TEST)
 
 IF(WIN32)
-  IF(WINDOWS_VERSION STREQUAL "WIN8")
+  IF(WINDOWS_VERSION STREQUAL "WIN10")
+    SET(NTDDI_VERSION 0x0A000000)
+    SET(_WIN32_WINNT 0x0A00)
+    SET(WINVER 0x0A00)
+  ELSEIF(WINDOWS_VERSION STREQUAL "WIN8")
     SET(NTDDI_VERSION 0x06020000)
     SET(_WIN32_WINNT 0x0602)
     SET(WINVER 0x0602)
@@ -260,12 +271,12 @@ IF(WIN32)
     SET(NTDDI_VERSION 0x05010000)
     SET(_WIN32_WINNT 0x0501)
     SET(WINVER 0x0501)
-  ELSE(WINDOWS_VERSION STREQUAL "WIN8")
+  ELSE(WINDOWS_VERSION STREQUAL "WIN10")
     # Default to Windows Server 2003 API if we don't recognize the specifier
     SET(NTDDI_VERSION 0x05020000)
     SET(_WIN32_WINNT 0x0502)
     SET(WINVER 0x0502)
-  ENDIF(WINDOWS_VERSION STREQUAL "WIN8")
+  ENDIF(WINDOWS_VERSION STREQUAL "WIN10")
 ENDIF(WIN32)
 
 IF(MSVC)
@@ -284,6 +295,10 @@ ENDIF(MSVC)
 
 IF("${CMAKE_C_PLATFORM_ID}" MATCHES "^(HP-UX)$")
   ADD_DEFINITIONS(-D_XOPEN_SOURCE=500) # Ask wchar.h for mbstate_t
+ENDIF()
+
+IF(MINGW)
+  ADD_DEFINITIONS(-D__USE_MINGW_ANSI_STDIO)
 ENDIF()
 
 #
@@ -373,7 +388,7 @@ IF(WIN32 AND NOT CMAKE_CL_64 AND NOT CYGWIN)
   SET(__GNUWIN32PATH "C:/Program Files/GnuWin32")
 ENDIF(WIN32 AND NOT CMAKE_CL_64 AND NOT CYGWIN)
 IF(DEFINED __GNUWIN32PATH AND EXISTS "${__GNUWIN32PATH}")
-  # You have to add a path availabel DLL file into PATH environment variable.
+  # You have to add a path available DLL file into PATH environment variable.
   # Maybe DLL path is "C:/Program Files/GnuWin32/bin".
   # The zlib and the bzip2 Setup program have installed programs and DLLs into
   # "C:/Program Files/GnuWin32" by default.
@@ -599,8 +614,13 @@ IF(ENABLE_ZSTD)
     SET(ZSTD_FIND_QUIETLY TRUE)
   ENDIF (ZSTD_INCLUDE_DIR)
 
-  FIND_PATH(ZSTD_INCLUDE_DIR zstd.h)
-  FIND_LIBRARY(ZSTD_LIBRARY NAMES zstd libzstd)
+  IF(UNIX)
+    FIND_PACKAGE(PkgConfig QUIET)
+    PKG_SEARCH_MODULE(PC_ZSTD libzstd)
+  ENDIF()
+
+  FIND_PATH(ZSTD_INCLUDE_DIR zstd.h HINTS ${PC_ZSTD_INCLUDEDIR} ${PC_ZSTD_INCLUDE_DIRS})
+  FIND_LIBRARY(ZSTD_LIBRARY NAMES zstd libzstd HINTS ${PC_ZSTD_LIBDIR} ${PC_ZSTD_LIBRARY_DIRS})
   INCLUDE(FindPackageHandleStandardArgs)
   FIND_PACKAGE_HANDLE_STANDARD_ARGS(ZSTD DEFAULT_MSG ZSTD_LIBRARY ZSTD_INCLUDE_DIR)
 ELSE(ENABLE_ZSTD)
@@ -613,7 +633,8 @@ IF(ZSTD_FOUND)
   CMAKE_PUSH_CHECK_STATE()
   SET(CMAKE_REQUIRED_LIBRARIES ${ZSTD_LIBRARY})
   SET(CMAKE_REQUIRED_INCLUDES ${ZSTD_INCLUDE_DIR})
-  CHECK_FUNCTION_EXISTS(ZSTD_compressStream HAVE_LIBZSTD)
+  CHECK_FUNCTION_EXISTS(ZSTD_decompressStream HAVE_LIBZSTD)
+  CHECK_FUNCTION_EXISTS(ZSTD_compressStream HAVE_LIBZSTD_COMPRESSOR)
   #
   # TODO: test for static library.
   #
@@ -739,6 +760,26 @@ CHECK_C_SOURCE_COMPILES(
  SAFE_TO_DEFINE_EXTENSIONS)
 
 #
+# Find mbed TLS
+#
+IF(ENABLE_MBEDTLS)
+  FIND_PACKAGE(MbedTLS)
+  IF(MBEDTLS_FOUND)
+    SET(HAVE_LIBMBEDCRYPTO 1)
+    LIST(APPEND ADDITIONAL_LIBS ${MBEDCRYPTO_LIBRARY})
+    INCLUDE_DIRECTORIES(${MBEDTLS_INCLUDE_DIRS})
+
+    LIST(APPEND CMAKE_REQUIRED_INCLUDES ${MBEDTLS_INCLUDE_DIRS})
+    LA_CHECK_INCLUDE_FILE("mbedtls/aes.h" HAVE_MBEDTLS_AES_H)
+    LA_CHECK_INCLUDE_FILE("mbedtls/md.h" HAVE_MBEDTLS_MD_H)
+    LA_CHECK_INCLUDE_FILE("mbedtls/pkcs5.h" HAVE_MBEDTLS_PKCS5_H)
+
+  ENDIF(MBEDTLS_FOUND)
+  MARK_AS_ADVANCED(CLEAR MBEDTLS_INCLUDE_DIRS)
+  MARK_AS_ADVANCED(CLEAR MBEDCRYPTO_LIBRARY)
+ENDIF(ENABLE_MBEDTLS)
+
+#
 # Find Nettle
 #
 IF(ENABLE_NETTLE)
@@ -800,6 +841,8 @@ MACRO(CHECK_CRYPTO ALGORITHMS IMPLEMENTATION)
       STRING(TOUPPER "${ALGORITHM}" algorithm)
       IF ("${IMPLEMENTATION}" MATCHES "^OPENSSL$" AND NOT OPENSSL_FOUND)
         SET(ARCHIVE_CRYPTO_${ALGORITHM}_${IMPLEMENTATION} FALSE)
+      ELSEIF("${IMPLEMENTATION}" MATCHES "^MBEDTLS$" AND NOT MBEDTLS_FOUND)
+        SET(ARCHIVE_CRYPTO_${ALGORITHM}_${IMPLEMENTATION} FALSE)
       ELSEIF("${IMPLEMENTATION}" MATCHES "^NETTLE$" AND NOT NETTLE_FOUND)
         SET(ARCHIVE_CRYPTO_${ALGORITHM}_${IMPLEMENTATION} FALSE)
       ENDIF("${IMPLEMENTATION}" MATCHES "^OPENSSL$" AND NOT OPENSSL_FOUND)
@@ -815,6 +858,11 @@ MACRO(CHECK_CRYPTO ALGORITHMS IMPLEMENTATION)
 	      "${TRY_CRYPTO_REQUIRED_INCLUDES};${OPENSSL_INCLUDE_DIR}")
 	    SET(TRY_CRYPTO_REQUIRED_LIBS
 	        "-DLINK_LIBRARIES:STRING=${OPENSSL_LIBRARIES}")
+	ELSEIF("${IMPLEMENTATION}" MATCHES "^MBEDTLS$" AND MBEDTLS_FOUND)
+	    SET(TRY_CRYPTO_REQUIRED_INCLUDES
+	      "${TRY_CRYPTO_REQUIRED_INCLUDES};${MBEDTLS_INCLUDE_DIRS}")
+	    SET(TRY_CRYPTO_REQUIRED_LIBS
+	      "-DLINK_LIBRARIES:STRING=${MBEDCRYPTO_LIBRARY}")
 	ELSEIF("${IMPLEMENTATION}" MATCHES "^NETTLE$" AND NETTLE_FOUND)
 	    SET(TRY_CRYPTO_REQUIRED_INCLUDES
 	      "${TRY_CRYPTO_REQUIRED_INCLUDES};${NETTLE_INCLUDE_DIR}")
@@ -983,7 +1031,7 @@ MACRO(CHECK_ICONV LIB TRY_ICONV_CONST)
         CMAKE_C_COMPILER_ID MATCHES "^Clang$")
       #
       # During checking iconv proto type, we should use -Werror to avoid the
-      # success of iconv detection with a warnig which success is a miss
+      # success of iconv detection with a warning which success is a miss
       # detection. So this needs for all build mode(even it's a release mode).
       #
       SET(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror")
@@ -1216,9 +1264,10 @@ IF(NOT FOUND_POSIX_REGEX_LIB AND POSIX_REGEX_LIB MATCHES "^(AUTO|LIBPCREPOSIX)$"
   #
   # If requested, try finding library for PCREPOSIX
   #
-  IF(ENABLE_LibGCC)
-    FIND_PACKAGE(LibGCC)
+  IF(ENABLE_LIBGCC)
+    FIND_PACKAGE(LIBGCC)
   ELSE()
+    MESSAGE(FATAL_ERROR "libgcc not found.")
     SET(LIBGCC_FOUND FALSE) # Override cached value
   ENDIF()
   IF(ENABLE_PCREPOSIX)
@@ -1320,6 +1369,7 @@ CHECK_FUNCTION_EXISTS_GLIBC(lchflags HAVE_LCHFLAGS)
 CHECK_FUNCTION_EXISTS_GLIBC(lchmod HAVE_LCHMOD)
 CHECK_FUNCTION_EXISTS_GLIBC(lchown HAVE_LCHOWN)
 CHECK_FUNCTION_EXISTS_GLIBC(link HAVE_LINK)
+CHECK_FUNCTION_EXISTS_GLIBC(linkat HAVE_LINKAT)
 CHECK_FUNCTION_EXISTS_GLIBC(localtime_r HAVE_LOCALTIME_R)
 CHECK_FUNCTION_EXISTS_GLIBC(lstat HAVE_LSTAT)
 CHECK_FUNCTION_EXISTS_GLIBC(lutimes HAVE_LUTIMES)
@@ -1346,6 +1396,7 @@ CHECK_FUNCTION_EXISTS_GLIBC(strchr HAVE_STRCHR)
 CHECK_FUNCTION_EXISTS_GLIBC(strdup HAVE_STRDUP)
 CHECK_FUNCTION_EXISTS_GLIBC(strerror HAVE_STRERROR)
 CHECK_FUNCTION_EXISTS_GLIBC(strncpy_s HAVE_STRNCPY_S)
+CHECK_FUNCTION_EXISTS_GLIBC(strnlen HAVE_STRNLEN)
 CHECK_FUNCTION_EXISTS_GLIBC(strrchr HAVE_STRRCHR)
 CHECK_FUNCTION_EXISTS_GLIBC(symlink HAVE_SYMLINK)
 CHECK_FUNCTION_EXISTS_GLIBC(timegm HAVE_TIMEGM)
@@ -1364,6 +1415,7 @@ CHECK_FUNCTION_EXISTS_GLIBC(wctomb HAVE_WCTOMB)
 CHECK_FUNCTION_EXISTS_GLIBC(_ctime64_s HAVE__CTIME64_S)
 CHECK_FUNCTION_EXISTS_GLIBC(_fseeki64 HAVE__FSEEKI64)
 CHECK_FUNCTION_EXISTS_GLIBC(_get_timezone HAVE__GET_TIMEZONE)
+CHECK_FUNCTION_EXISTS_GLIBC(_gmtime64_s HAVE__GMTIME64_S)
 CHECK_FUNCTION_EXISTS_GLIBC(_localtime64_s HAVE__LOCALTIME64_S)
 CHECK_FUNCTION_EXISTS_GLIBC(_mkgmtime64 HAVE__MKGMTIME64)
 
@@ -1386,6 +1438,10 @@ CHECK_C_SOURCE_COMPILES(
 CHECK_C_SOURCE_COMPILES(
   "#include <sys/types.h>\n#include <sys/mount.h>\nint main(void) { struct xvfsconf v; return sizeof(v);}"
   HAVE_STRUCT_XVFSCONF)
+
+CHECK_C_SOURCE_COMPILES(
+  "#include <sys/types.h>\n#include <sys/mount.h>\nint main(void) { struct statfs s; return sizeof(s);}"
+  HAVE_STRUCT_STATFS)
 
 # Make sure we have the POSIX version of readdir_r, not the
 # older 2-argument version.
@@ -1416,9 +1472,13 @@ CHECK_C_SOURCE_COMPILES(
   "#include <sys/sysmacros.h>\nint main() { return major(256); }"
   MAJOR_IN_SYSMACROS)
 
+IF(ENABLE_LZMA)
 CHECK_C_SOURCE_COMPILES(
   "#include <lzma.h>\n#if LZMA_VERSION < 50020000\n#error unsupported\n#endif\nint main(void){lzma_stream_encoder_mt(0, 0); return 0;}"
   HAVE_LZMA_STREAM_ENCODER_MT)
+ELSE()
+  SET(HAVE_LZMA_STREAM_ENCODER_MT 0)
+ENDIF(ENABLE_LZMA)
 
 IF(HAVE_STRERROR_R)
   SET(HAVE_DECL_STRERROR_R 1)
@@ -1458,9 +1518,14 @@ CHECK_STRUCT_HAS_MEMBER("struct tm" tm_gmtoff
 CHECK_STRUCT_HAS_MEMBER("struct tm" __tm_gmtoff
     "time.h" HAVE_STRUCT_TM___TM_GMTOFF)
 
+IF(HAVE_STRUCT_STATFS)
 # Check for f_namemax in struct statfs
 CHECK_STRUCT_HAS_MEMBER("struct statfs" f_namemax
     "sys/param.h;sys/mount.h" HAVE_STRUCT_STATFS_F_NAMEMAX)
+# Check for f_iosize in struct statfs
+CHECK_STRUCT_HAS_MEMBER("struct statfs" f_iosize
+    "sys/param.h;sys/mount.h" HAVE_STRUCT_STATFS_F_IOSIZE)
+ENDIF(HAVE_STRUCT_STATFS)
 
 # Check for birthtime in struct stat
 CHECK_STRUCT_HAS_MEMBER("struct stat" st_birthtime
@@ -1500,15 +1565,15 @@ CHECK_STRUCT_HAS_MEMBER("struct tm" tm_sec
 # Check for integer types
 #
 #
-CHECK_TYPE_SIZE("short" SIZE_OF_SHORT)
-CHECK_TYPE_SIZE("int" SIZE_OF_INT)
-CHECK_TYPE_SIZE("long" SIZE_OF_LONG)
-CHECK_TYPE_SIZE("long long"     SIZE_OF_LONG_LONG)
+CHECK_TYPE_SIZE("short" SIZEOF_SHORT)
+CHECK_TYPE_SIZE("int" SIZEOF_INT)
+CHECK_TYPE_SIZE("long" SIZEOF_LONG)
+CHECK_TYPE_SIZE("long long"     SIZEOF_LONG_LONG)
 
-CHECK_TYPE_SIZE("unsigned short" SIZE_OF_UNSIGNED_SHORT)
-CHECK_TYPE_SIZE("unsigned" SIZE_OF_UNSIGNED)
-CHECK_TYPE_SIZE("unsigned long" SIZE_OF_UNSIGNED_LONG)
-CHECK_TYPE_SIZE("unsigned long long" SIZE_OF_UNSIGNED_LONG_LONG)
+CHECK_TYPE_SIZE("unsigned short" SIZEOF_UNSIGNED_SHORT)
+CHECK_TYPE_SIZE("unsigned" SIZEOF_UNSIGNED)
+CHECK_TYPE_SIZE("unsigned long" SIZEOF_UNSIGNED_LONG)
+CHECK_TYPE_SIZE("unsigned long long" SIZEOF_UNSIGNED_LONG_LONG)
 
 CHECK_TYPE_SIZE("__int64" __INT64)
 CHECK_TYPE_SIZE("unsigned __int64" UNSIGNED___INT64)
@@ -1960,6 +2025,7 @@ CHECK_CRYPTO("MD5;RMD160;SHA1;SHA256;SHA384;SHA512" LIBC)
 CHECK_CRYPTO("SHA256;SHA384;SHA512" LIBC2)
 CHECK_CRYPTO("SHA256;SHA384;SHA512" LIBC3)
 CHECK_CRYPTO("MD5;SHA1;SHA256;SHA384;SHA512" LIBSYSTEM)
+CHECK_CRYPTO("MD5;RMD160;SHA1;SHA256;SHA384;SHA512" MBEDTLS)
 CHECK_CRYPTO("MD5;RMD160;SHA1;SHA256;SHA384;SHA512" NETTLE)
 CHECK_CRYPTO("MD5;RMD160;SHA1;SHA256;SHA384;SHA512" OPENSSL)
 
@@ -1967,6 +2033,17 @@ CHECK_CRYPTO("MD5;RMD160;SHA1;SHA256;SHA384;SHA512" OPENSSL)
 CHECK_CRYPTO("MD5;RMD160;SHA1;SHA256;SHA512" LIBMD)
 
 CHECK_CRYPTO_WIN("MD5;SHA1;SHA256;SHA384;SHA512")
+
+# Check visibility annotations
+SET(OLD_CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
+SET(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -fvisibility=hidden -Werror")
+CHECK_C_SOURCE_COMPILES("void __attribute__((visibility(\"default\"))) foo(void);
+int main() { return 0; }" HAVE_VISIBILITY_ATTR)
+IF (HAVE_VISIBILITY_ATTR)
+  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=hidden")
+  ADD_DEFINITIONS(-D__LIBARCHIVE_ENABLE_VISIBILITY)
+ENDIF(HAVE_VISIBILITY_ATTR)
+SET(CMAKE_REQUIRED_FLAGS "${OLD_CMAKE_REQUIRED_FLAGS}")
 
 # Generate "config.h" from "build/cmake/config.h.in"
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/config.h.in
@@ -2001,6 +2078,11 @@ INCLUDE_DIRECTORIES(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/libarchive)
 IF(MSVC)
   ADD_DEFINITIONS(-D_CRT_SECURE_NO_DEPRECATE)
 ENDIF(MSVC)
+
+IF(APPLE)
+  # CC_MD5_Init() functions are deprecated on macOS 10.15, but we want to use them
+  ADD_DEFINITIONS(-Wno-deprecated-declarations)
+ENDIF(APPLE)
 
 IF(ENABLE_TEST)
   ADD_CUSTOM_TARGET(run_all_tests)

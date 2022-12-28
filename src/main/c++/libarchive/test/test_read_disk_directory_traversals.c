@@ -528,7 +528,7 @@ test_basic(void)
 	 */
 
 	/* Save current working directory. */
-#ifdef PATH_MAX
+#if defined(PATH_MAX) && !defined(__GLIBC__)
 	initial_cwd = getcwd(NULL, PATH_MAX);/* Solaris getcwd needs the size. */
 #else
 	initial_cwd = getcwd(NULL, 0);
@@ -560,7 +560,7 @@ test_basic(void)
 	failure(
 	    "Current working directory does not return to the initial"
 	    "directory");
-#ifdef PATH_MAX
+#if defined(PATH_MAX) && !defined(__GLIBC__)
 	cwd = getcwd(NULL, PATH_MAX);/* Solaris getcwd needs the size. */
 #else
 	cwd = getcwd(NULL, 0);
@@ -1047,7 +1047,14 @@ test_restore_atime(void)
 	size_t size;
 	int64_t offset;
 	int file_count;
+	const char *skip_test_restore_atime;
 
+        skip_test_restore_atime = getenv("SKIP_TEST_RESTORE_ATIME");
+        if (skip_test_restore_atime != NULL) {
+                skipping("Skipping restore atime tests due to "
+                    "SKIP_TEST_RESTORE_ATIME environment variable");
+                return;
+        }
 	if (!atimeIsUpdated()) {
 		skipping("Can't test restoring atime on this filesystem");
 		return;
@@ -1775,7 +1782,8 @@ test_parent(void)
 	archive_entry_clear(ae);
 	r = archive_read_next_header2(a, ae);
 	if (r == ARCHIVE_FAILED) {
-#if defined(O_PATH) || defined(O_SEARCH) || defined(O_EXEC)
+#if defined(O_PATH) || defined(O_SEARCH) || \
+ (defined(__FreeBSD__) && defined(O_EXEC))
 		assertEqualIntA(a, ARCHIVE_OK, r);
 #endif
 		/* Close the disk object. */
@@ -1832,6 +1840,8 @@ test_parent(void)
 	}
 
 	assertChdir("..");
+	assertChmod("lock", 0755);
+	assertChmod("lock/lock2", 0755);
 
 	/* Destroy the disk object. */
 	assertEqualInt(ARCHIVE_OK, archive_read_free(a));

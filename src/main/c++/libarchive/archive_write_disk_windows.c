@@ -165,6 +165,8 @@ struct archive_write_disk {
 	struct archive_entry	*entry; /* Entry being extracted. */
 	wchar_t			*name; /* Name of entry, possibly edited. */
 	struct archive_wstring	 _name_data; /* backing store for 'name' */
+	wchar_t			*tmpname; /* Temporary name */
+	struct archive_wstring	_tmpname_data; /* backing store for 'tmpname' */
 	/* Tasks remaining for this object. */
 	int			 todo;
 	/* Tasks deferred until end-of-archive. */
@@ -211,10 +213,11 @@ static int	check_symlinks(struct archive_write_disk *);
 static int	create_filesystem_object(struct archive_write_disk *);
 static struct fixup_entry *current_fixup(struct archive_write_disk *,
 		    const wchar_t *pathname);
-static int	cleanup_pathname(struct archive_write_disk *);
+static int	cleanup_pathname(struct archive_write_disk *, wchar_t *);
 static int	create_dir(struct archive_write_disk *, wchar_t *);
 static int	create_parent_dir(struct archive_write_disk *, wchar_t *);
 static int	la_chmod(const wchar_t *, mode_t);
+static int	la_mktemp(struct archive_write_disk *);
 static int	older(BY_HANDLE_FILE_INFORMATION *, struct archive_entry *);
 static int	permissive_name_w(struct archive_write_disk *);
 static int	restore_entry(struct archive_write_disk *);
@@ -234,8 +237,6 @@ static int	set_times_from_entry(struct archive_write_disk *);
 static struct fixup_entry *sort_dir_list(struct fixup_entry *p);
 static ssize_t	write_data_block(struct archive_write_disk *,
 		    const char *, size_t);
-
-static struct archive_vtable *archive_write_disk_vtable(void);
 
 static int	_archive_write_disk_close(struct archive *);
 static int	_archive_write_disk_free(struct archive *);
@@ -534,6 +535,30 @@ exit_chmode:
 	return (ret);
 }
 
+static int
+la_mktemp(struct archive_write_disk *a)
+{
+	int fd;
+	mode_t mode;
+
+	archive_wstring_empty(&(a->_tmpname_data));
+	archive_wstrcpy(&(a->_tmpname_data), a->name);
+	archive_wstrcat(&(a->_tmpname_data), L".XXXXXX");
+	a->tmpname = a->_tmpname_data.s;
+
+	fd = __archive_mkstemp(a->tmpname);
+	if (fd == -1)
+		return -1;
+
+	mode = a->mode & 0777 & ~a->user_umask;
+	if (la_chmod(a->tmpname, mode) == -1) {
+		la_dosmaperr(GetLastError());
+		_close(fd);
+		return -1;
+	}
+	return (fd);
+}
+
 static void *
 la_GetFunctionKernel32(const char *name)
 {
@@ -601,7 +626,7 @@ la_CreateSymbolicLinkW(const wchar_t *linkname, const wchar_t *target,
 	static BOOLEAN (WINAPI *f)(LPCWSTR, LPCWSTR, DWORD);
 	static int set;
 	wchar_t *ttarget, *p;
-	int len;
+	size_t len;
 	DWORD attrs = 0;
 	DWORD flags = 0;
 	DWORD newflags = 0;
@@ -732,25 +757,16 @@ lazy_stat(struct archive_write_disk *a)
 	return (ARCHIVE_WARN);
 }
 
-static struct archive_vtable *
-archive_write_disk_vtable(void)
-{
-	static struct archive_vtable av;
-	static int inited = 0;
-
-	if (!inited) {
-		av.archive_close = _archive_write_disk_close;
-		av.archive_filter_bytes = _archive_write_disk_filter_bytes;
-		av.archive_free = _archive_write_disk_free;
-		av.archive_write_header = _archive_write_disk_header;
-		av.archive_write_finish_entry
-		    = _archive_write_disk_finish_entry;
-		av.archive_write_data = _archive_write_disk_data;
-		av.archive_write_data_block = _archive_write_disk_data_block;
-		inited = 1;
-	}
-	return (&av);
-}
+static const struct archive_vtable
+archive_write_disk_vtable = {
+	.archive_close = _archive_write_disk_close,
+	.archive_filter_bytes = _archive_write_disk_filter_bytes,
+	.archive_free = _archive_write_disk_free,
+	.archive_write_header = _archive_write_disk_header,
+	.archive_write_finish_entry = _archive_write_disk_finish_entry,
+	.archive_write_data = _archive_write_disk_data,
+	.archive_write_data_block = _archive_write_disk_data_block,
+};
 
 static int64_t
 _archive_write_disk_filter_bytes(struct archive *_a, int n)
@@ -827,7 +843,7 @@ _archive_write_disk_header(struct archive *_a, struct archive_entry *entry)
 	 * dir restores; the dir restore logic otherwise gets messed
 	 * up by nonsense like "dir/.".
 	 */
-	ret = cleanup_pathname(a);
+	ret = cleanup_pathname(a, a->name);
 	if (ret != ARCHIVE_OK)
 		return (ret);
 
@@ -1252,6 +1268,18 @@ _archive_write_disk_finish_entry(struct archive *_a)
 	if (a->fh != INVALID_HANDLE_VALUE) {
 		CloseHandle(a->fh);
 		a->fh = INVALID_HANDLE_VALUE;
+		if (a->tmpname) {
+			/* Windows does not support atomic rename */
+			disk_unlink(a->name);
+			if (_wrename(a->tmpname, a->name) != 0) {
+				la_dosmaperr(GetLastError());
+				archive_set_error(&a->archive, errno,
+				    "Failed to rename temporary file");
+				ret = ARCHIVE_FAILED;
+				disk_unlink(a->tmpname);
+			}
+			a->tmpname = NULL;
+		}
 	}
 	/* If there's an entry, we can release it now. */
 	archive_entry_free(a->entry);
@@ -1334,7 +1362,7 @@ archive_write_disk_new(void)
 	a->archive.magic = ARCHIVE_WRITE_DISK_MAGIC;
 	/* We're ready to write a header immediately. */
 	a->archive.state = ARCHIVE_STATE_HEADER;
-	a->archive.vtable = archive_write_disk_vtable();
+	a->archive.vtable = &archive_write_disk_vtable;
 	a->start_time = time(NULL);
 	/* Query and restore the umask. */
 	umask(a->user_umask = umask(0));
@@ -1342,6 +1370,7 @@ archive_write_disk_new(void)
 		free(a);
 		return (NULL);
 	}
+	a->path_safe.s[0] = 0;
 	return (&a->archive);
 }
 
@@ -1530,26 +1559,51 @@ restore_entry(struct archive_write_disk *a)
 		}
 
 		if (!S_ISDIR(st_mode)) {
-			/* Edge case: a directory symlink pointing to a file */
 			if (a->flags &
 			    ARCHIVE_EXTRACT_CLEAR_NOCHANGE_FFLAGS) {
 				(void)clear_nochange_fflags(a);
 			}
-			if (dirlnk) {
-				if (disk_rmdir(a->name) != 0) {
+			if ((a->flags & ARCHIVE_EXTRACT_SAFE_WRITES) &&
+				S_ISREG(st_mode)) {
+				int fd = la_mktemp(a);
+
+				if (fd == -1) {
+					la_dosmaperr(GetLastError());
 					archive_set_error(&a->archive, errno,
-					    "Can't unlink directory symlink");
+					    "Can't create temporary file");
 					return (ARCHIVE_FAILED);
 				}
-			} else if (disk_unlink(a->name) != 0) {
-				/* A non-dir is in the way, unlink it. */
-				archive_set_error(&a->archive, errno,
-				    "Can't unlink already-existing object");
-				return (ARCHIVE_FAILED);
+				a->fh = (HANDLE)_get_osfhandle(fd);
+				if (a->fh == INVALID_HANDLE_VALUE) {
+					la_dosmaperr(GetLastError());
+					return (ARCHIVE_FAILED);
+				}
+				a->pst = NULL;
+				en = 0;
+			} else {
+				if (dirlnk) {
+					/* Edge case: dir symlink pointing
+					 * to a file */
+					if (disk_rmdir(a->name) != 0) {
+						archive_set_error(&a->archive,
+						    errno, "Can't unlink "
+						    "directory symlink");
+						return (ARCHIVE_FAILED);
+					}
+				} else {
+					if (disk_unlink(a->name) != 0) {
+						/* A non-dir is in the way,
+						 * unlink it. */
+						archive_set_error(&a->archive,
+						    errno, "Can't unlink "
+						    "already-existing object");
+						return (ARCHIVE_FAILED);
+					}
+				}
+				a->pst = NULL;
+				/* Try again. */
+				en = create_filesystem_object(a);
 			}
-			a->pst = NULL;
-			/* Try again. */
-			en = create_filesystem_object(a);
 		} else if (!S_ISDIR(a->mode)) {
 			/* A dir is in the way of a non-dir, rmdir it. */
 			if (a->flags & ARCHIVE_EXTRACT_CLEAR_NOCHANGE_FFLAGS)
@@ -1601,19 +1655,47 @@ create_filesystem_object(struct archive_write_disk *a)
 	wchar_t *fullname;
 	mode_t final_mode, mode;
 	int r;
+	DWORD attrs = 0;
 
 	/* We identify hard/symlinks according to the link names. */
 	/* Since link(2) and symlink(2) don't handle modes, we're done here. */
 	linkname = archive_entry_hardlink_w(a->entry);
 	if (linkname != NULL) {
-		wchar_t *linkfull, *namefull;
-
-		linkfull = __la_win_permissive_name_w(linkname);
+		wchar_t *linksanitized, *linkfull, *namefull;
+		size_t l = (wcslen(linkname) + 1) * sizeof(wchar_t);
+		linksanitized = malloc(l);
+		if (linksanitized == NULL) {
+			archive_set_error(&a->archive, ENOMEM,
+			    "Can't allocate memory for hardlink target");
+			return (-1);
+		}
+		memcpy(linksanitized, linkname, l);
+		r = cleanup_pathname(a, linksanitized);
+		if (r != ARCHIVE_OK) {
+			free(linksanitized);
+			return (r);
+		}
+		linkfull = __la_win_permissive_name_w(linksanitized);
+		free(linksanitized);
 		namefull = __la_win_permissive_name_w(a->name);
 		if (linkfull == NULL || namefull == NULL) {
 			errno = EINVAL;
 			r = -1;
 		} else {
+			/*
+			 * Unlinking and linking here is really not atomic,
+			 * but doing it right, would require us to construct
+			 * an mktemplink() function, and then use _wrename().
+			 */
+			if (a->flags & ARCHIVE_EXTRACT_SAFE_WRITES) {
+				attrs = GetFileAttributesW(namefull);
+				if (attrs != INVALID_FILE_ATTRIBUTES) {
+					if (attrs & FILE_ATTRIBUTE_DIRECTORY)
+						disk_rmdir(namefull);
+					else
+						disk_unlink(namefull);
+				}
+			}
 			r = la_CreateHardLinkW(namefull, linkfull);
 			if (r == 0) {
 				la_dosmaperr(GetLastError());
@@ -1650,6 +1732,18 @@ create_filesystem_object(struct archive_write_disk *a)
 	}
 	linkname = archive_entry_symlink_w(a->entry);
 	if (linkname != NULL) {
+		/*
+		 * Unlinking and linking here is really not atomic,
+		 * but doing it right, would require us to construct
+		 * an mktemplink() function, and then use _wrename().
+		 */
+		attrs = GetFileAttributesW(a->name);
+		if (attrs != INVALID_FILE_ATTRIBUTES) {
+			if (attrs & FILE_ATTRIBUTE_DIRECTORY)
+				disk_rmdir(a->name);
+			else
+				disk_unlink(a->name);
+		}
 #if HAVE_SYMLINK
 		return symlink(linkname, a->name) ? errno : 0;
 #else
@@ -1686,6 +1780,7 @@ create_filesystem_object(struct archive_write_disk *a)
 		/* POSIX requires that we fall through here. */
 		/* FALLTHROUGH */
 	case AE_IFREG:
+		a->tmpname = NULL;
 		fullname = a->name;
 		/* O_WRONLY | O_CREAT | O_EXCL */
 		a->fh = CreateFileW(fullname, GENERIC_WRITE, 0, NULL,
@@ -1842,6 +1937,7 @@ _archive_write_disk_free(struct archive *_a)
 	archive_write_disk_set_user_lookup(&a->archive, NULL, NULL, NULL);
 	archive_entry_free(a->entry);
 	archive_wstring_free(&a->_name_data);
+	archive_wstring_free(&a->_tmpname_data);
 	archive_string_free(&a->archive.error_string);
 	archive_wstring_free(&a->path_safe);
 	a->archive.magic = 0;
@@ -2059,6 +2155,8 @@ check_symlinks(struct archive_write_disk *a)
 				return (ARCHIVE_FAILED);
 			}
 		}
+		if (!c)
+			break;
 		pn[0] = c;
 		pn++;
 	}
@@ -2091,12 +2189,12 @@ guidword(wchar_t *p, int n)
  * set) any '..' in the path.
  */
 static int
-cleanup_pathname(struct archive_write_disk *a)
+cleanup_pathname(struct archive_write_disk *a, wchar_t *name)
 {
 	wchar_t *dest, *src, *p, *top;
 	wchar_t separator = L'\0';
 
-	p = a->name;
+	p = name;
 	if (*p == L'\0') {
 		archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
 		    "Invalid empty pathname");
@@ -2108,7 +2206,7 @@ cleanup_pathname(struct archive_write_disk *a)
 		if (*p == L'/')
 			*p = L'\\';
 	}
-	p = a->name;
+	p = name;
 
 	/* Skip leading "\\.\" or "\\?\" or "\\?\UNC\" or
 	 * "\\?\Volume{GUID}\"
@@ -2163,6 +2261,9 @@ cleanup_pathname(struct archive_write_disk *a)
 			return (ARCHIVE_FAILED);
 		} else
 			p += 4;
+    /* Network drive path like "\\<server-name>\<share-name>\file" */
+    } else if (p[0] == L'\\' && p[1] == L'\\') {
+        p += 2;
 	}
 
 	/* Skip leading drive letter from archives created
