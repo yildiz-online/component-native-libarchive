@@ -23,7 +23,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "archive_platform.h"
-__FBSDID("$FreeBSD$");
 
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
@@ -623,8 +622,8 @@ read_toc(struct archive_read *a)
 			(size_t)xar->toc_chksum_size, NULL, 0);
 		__archive_read_consume(a, xar->toc_chksum_size);
 		xar->offset += xar->toc_chksum_size;
-		if (r != ARCHIVE_OK)
 #ifndef DONT_FAIL_ON_CRC_ERROR
+		if (r != ARCHIVE_OK)
 			return (ARCHIVE_FATAL);
 #endif
 	}
@@ -1127,7 +1126,7 @@ atohex(unsigned char *b, size_t bsize, const char *p, size_t psize)
 			x |= p[1] - '0';
 		else
 			return (-1);
-		
+
 		*b++ = x;
 		bsize--;
 		p += 2;
@@ -1139,11 +1138,11 @@ atohex(unsigned char *b, size_t bsize, const char *p, size_t psize)
 static time_t
 time_from_tm(struct tm *t)
 {
-#if HAVE_TIMEGM
+#if HAVE__MKGMTIME
+        return _mkgmtime(t);
+#elif HAVE_TIMEGM
         /* Use platform timegm() if available. */
         return (timegm(t));
-#elif HAVE__MKGMTIME64
-        return (_mkgmtime64(t));
 #else
         /* Else use direct calculation using POSIX assumptions. */
         /* First, fix up tm_yday based on the year/month/day. */
