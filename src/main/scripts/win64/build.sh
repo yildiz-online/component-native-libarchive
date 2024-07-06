@@ -7,6 +7,7 @@ cmake ../../c++ \
 -DCMAKE_INSTALL_PREFIX="../../../../target/classes/win64" \
 -DZLIB_WINAPI_EXITCODE=0 \
 -DZLIB_WINAPI_EXITCODE__TRYRUN_OUTPUT=0 \
+-DENABLE_CNG=OFF \
 -DCMAKE_TOOLCHAIN_FILE=mingw-toolchain.cmake
 
 make install
